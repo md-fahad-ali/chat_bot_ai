@@ -25,8 +25,8 @@ async function createProductsTable() {
         price DECIMAL(10,2),
         image_url TEXT,
         image_url2 TEXT,
-        text_embedding vector(384),
-        image_embedding vector(384)
+        text_embedding vector(128),
+        image_embedding vector(512)
       );
     `);
 

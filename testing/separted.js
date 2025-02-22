@@ -8,12 +8,6 @@ import {
 import { createReadStream, writeFileSync, readFileSync } from 'fs';
 import csv from 'csv-parser';
 import readline from 'readline';
-import https from "https";
-import { PGVectorStore } from "@langchain/community/vectorstores/pgvector";
-import pkg from 'pg';
-const { PoolConfig, Pool } = pkg;
-
-
 
 async function generateTextEmbedding(text) {
     try {
@@ -77,127 +71,76 @@ async function generateTextEmbedding(text) {
     }
 }
 
-const config = {
-    postgresConnectionOptions: {
-        type: "postgres",
-        host: "localhost",
-        port: 5432,
-        user: "postgres",
-        password: "1234",
-        database: "chat_bot",
-    },
-    tableName: "products",
-    columns: {
-        idColumnName: "id",
-        vectorColumnName: "text_embedding",
-        contentColumnName: "title",
-        metadataColumnName: "metadata",
-        descriptionColumnName: "description",
-        priceColumnName: "price",
-    },
-    distanceStrategy: "cosine",
-};
+async function generateBatchTextEmbeddings(texts) {
+    const tokenizer = await AutoTokenizer.from_pretrained("Xenova/all-MiniLM-L6-v2");
+    const textModel = await AutoModel.from_pretrained("Xenova/all-MiniLM-L6-v2");
 
-const embeddings = {
-    embedDocuments: async (texts) => {
-        const data = JSON.stringify({
-            model: "jina-clip-v2",
-            dimensions: 1024,
-            normalized: true,
-            embedding_type: "float",
-            input: texts.map((text) => ({ text })),
-        });
+    const normalizedTexts = texts.map(text => `${text}`.toLowerCase().trim());
+    const textInputs = await tokenizer(normalizedTexts, {
+        padding: true,
+        truncation: true,
+        max_length: 128,
+        return_tensors: 'pt'
+    });
 
-        const options = {
-            hostname: "api.jina.ai",
-            port: 443,
-            path: "/v1/embeddings",
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: "Bearer jina_7315941fbe6e4b639916e016884d24cf6Mjf2ug0y35gxbxLQgir76wP4gA3",
-            },
-        };
+    const textOutput = await textModel(textInputs);
+    const tokenTensor = textOutput.last_hidden_state;
 
-        return new Promise((resolve, reject) => {
-            const req = https.request(options, (res) => {
-                let responseData = "";
-
-                res.on("data", (chunk) => {
-                    responseData += chunk;
-                });
-
-                res.on("end", () => {
-                    try {
-                        const parsedData = JSON.parse(responseData);
-                        const embeddings = parsedData.data.map((item) => item.embedding);
-                        console.log(`Processed ${embeddings.length} embeddings`);
-                        resolve(embeddings);
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            });
-
-            req.on("error", (error) => {
-                reject(error);
-            });
-
-            req.write(data);
-            req.end();
-        });
-    },
-    embedQuery: async (text) => {
-        const data = JSON.stringify({
-            model: "jina-clip-v2",
-            dimensions: 1024,
-            normalized: true,
-            embedding_type: "float",
-            input: [{ text }],
-        });
-
-        const options = {
-            hostname: "api.jina.ai",
-            port: 443,
-            path: "/v1/embeddings",
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: "Bearer jina_7315941fbe6e4b639916e016884d24cf6Mjf2ug0y35gxbxLQgir76wP4gA3",
-            },
-        };
-
-        return new Promise((resolve, reject) => {
-            const req = https.request(options, (res) => {
-                let responseData = "";
-
-                res.on("data", (chunk) => {
-                    responseData += chunk;
-                });
-
-                res.on("end", () => {
-                    try {
-                        const parsedData = JSON.parse(responseData);
-                        const embedding = parsedData.data[0].embedding;
-                        console.log("Processed query embedding");
-                        resolve(embedding);
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            });
-
-            req.on("error", (error) => {
-                reject(error);
-            });
-
-            req.write(data);
-            req.end();
-        });
+    // Perform pooling for each item in the batch
+    const pooledEmbeddings = [];
+    for (let b = 0; b < texts.length; b++) {
+        const pooled = meanPooling(tokenTensor, textInputs.attention_mask, b);
+        pooledEmbeddings.push(pooled);
     }
-};
 
-const vectorStore = await PGVectorStore.initialize(embeddings, config);
+    return pooledEmbeddings;
+}
+
+function cosineSimilarity(vecA, vecB) {
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+    }
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Retrieve similar products based on text query
+  async function retrieveSimilarProducts(query, topK = 5) {
+    try {
+      // Generate embedding for the query
+      const queryEmbedding = await generateTextEmbedding(query);
+
+      // Load stored embeddings and products
+      const storedEmbeddings = JSON.parse(readFileSync('text_embedding.json', 'utf8'));
+      const products = [];
+      await new Promise((resolve, reject) => {
+        createReadStream('product.csv')
+          .pipe(csv())
+          .on('data', (row) => products.push(row))
+          .on('end', resolve)
+          .on('error', reject);
+      });
+
+      // Calculate similarities
+      const similarities = storedEmbeddings.map((embedding, index) => ({
+        product: products[index],
+        similarity: cosineSimilarity(queryEmbedding, embedding)
+      }));
+
+      // Sort by similarity and get top K results
+      return similarities
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, topK);
+    } catch (error) {
+      console.error('Error retrieving similar products:', error);
+      throw error;
+    }
+  }
+
 
 async function generateImageEmbedding(imageUrl) {
     try {
@@ -238,23 +181,13 @@ async function generateImageEmbedding(imageUrl) {
             throw new Error("Generated embeddings contain invalid values");
         }
 
-        // console.log("Embeddings validation passed",embeddings);
+        console.log("Embeddings validation passed",embeddings);
         return embeddings;
     } catch (error) {
         console.error("Error in generateImageEmbedding:", error);
         throw error;
     }
 }
-
-const pool = new Pool({
-    host: "localhost",
-    port: 5432,
-    user: "postgres",
-    password: "1234",
-    database: "chat_bot",
-});
-
-const client = await pool.connect();
 
 async function processProducts() {
     try {
@@ -275,34 +208,56 @@ async function processProducts() {
         // Process each product.
         for (const product of products) {
             try {
+                // console.log(`Processing product: ${product.title}`);
+
+                // Combine title, description, and price similar to Python implementation.
                 const combinedText = `${product.title} ${product.description} ${product.price}`;
-                
+                const textEmbedding = await generateTextEmbedding(combinedText);
+                // console.log('Text Embedding:', textEmbedding);
+                textEmbeddings.push(textEmbedding);
+                // console.log('Text Embedding Dimension:', textEmbedding.length);
+
+                // Generate image embedding but don't save it
                 console.log("Processing image:", product.image);
-                const imageEmbedding = await generateImageEmbedding(product.image);
+                await generateImageEmbedding(product.image);
 
-                
-                const document = {
-                    pageContent: combinedText,
-                    metadata: {
-                        title: product.title,
-                        description: product.description,
-                        price: product.price,
-                        image: product.image,
-                        image2: product.image2,
-                        image_embedding: imageEmbedding
-                    },
-                }
-
-                
-                await vectorStore.addDocuments([document]);
-                
-                const sqlQuery = `UPDATE products SET price = CAST(metadata->>'price' AS double precision) WHERE price IS null`;
-                await client.query(sqlQuery);
-                
+                // console.log(`Successfully processed image and text for: ${product.title}`);
             } catch (error) {
                 console.error(`Error processing product ${product.title}:`, error);
             }
         }
+
+        // Save only text embeddings to a JSON file
+        writeFileSync('text_embedding.json', JSON.stringify(textEmbeddings, null, 2));
+        // console.log('Text embeddings saved to text_embedding.json');
+        // console.log('All products processed successfully');
+
+        const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+
+        // const askQuery = () => {
+        //     rl.question('Enter your search query (or type "exit" to quit): ', async (query) => {
+        //         if (query.toLowerCase() === 'exit') {
+        //             rl.close();
+        //             return;
+        //         }
+
+        //         const similarProducts = await retrieveSimilarProducts(query, 3);
+        //         console.log(`\nTop 3 products similar to "${query}":`);
+        //         similarProducts.forEach((result, index) => {
+        //             console.log(`\n${index + 1}. ${result.product.title}`);
+        //             console.log(`   Similarity: ${result.similarity.toFixed(4)}`);
+        //             console.log(`   Description: ${result.product.description}`);
+        //             console.log(`   Price: ${result.product.price}`);
+        //         });
+
+        //         askQuery(); // Ask for another query
+        //     });
+        // };
+
+        // askQuery();
 
     } catch (error) {
         console.error('Error processing products:', error);

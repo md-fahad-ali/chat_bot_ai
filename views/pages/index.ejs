@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drag and Drop Image Upload</title>
+  <style>
+    .search {
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: auto;
+      margin: 0;
+      background-color: #ffffff;
+    }
+
+    .upload-container {
+      width: 400px;
+      padding: 20px;
+      display: flex;
+      justify-items: center;
+      align-items: center;
+      flex-direction: column;
+      border: 2px dashed #ccc;
+      border-radius: 10px;
+      background-color: #fff;
+      text-align: center;
+      transition: border-color 0.3s;
+    }
+
+    .upload-container.dragover {
+      border-color: #007bff;
+    }
+
+    .upload-container img {
+      max-width: 100%;
+      max-height: 100px;
+      margin-top: 20px;
+      border-radius: 5px;
+    }
+
+    .upload-container input {
+      display: none;
+    }
+
+    .upload-container label {
+      display: block;
+      margin-top: 10px;
+      color: #007bff;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+    }
+
+    .upload-container p {
+      margin: 0;
+      color: #666;
+    }
+
+    #imageGrid {
+      display: none;
+    }
+
+    #searchInput {
+      display: block;
+      width: 80%;
+      max-width: 400px;
+      padding: 12px 20px;
+      border: 2px solid #ddd;
+      border-radius: 25px;
+      font-size: 16px;
+      outline: none;
+      transition: border-color 0.3s ease;
+    }
+
+    #searchInput:focus {
+      border-color: #007bff;
+      box-shadow: 0 0 5px rgba(0, 123, 255, 0.3);
+    }
+
+    #searchInput::placeholder {
+      color: #999;
+    }
+
+    .search-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      margin: 20px 0;
+    }
+
+    #searchButton {
+      padding: 12px 24px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 25px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background-color 0.3s ease, transform 0.2s ease;
+    }
+
+    #searchButton:hover {
+      background-color: #0056b3;
+      transform: translateY(-1px);
+    }
+
+    #searchButton:active {
+      transform: translateY(1px);
+    }
+
+    #imageGrid {
+      margin-top: 10px;
+    }
+
+    .product-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 10px;
+      margin: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      width: 300px;
+      height: auto;
+      background-color: #fff;
+      transition: transform 0.3s ease;
+      cursor: pointer;
+    }
+
+    .product-card:hover {
+      transform: translateY(-5px);
+    }
+
+    .show {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <script>
+    async function searchProducts() {
+      const search = document.getElementById("searchInput").value;
+      console.log(search);
+      const response = await fetch("/text-search", {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        method: "POST",
+        body: JSON.stringify({ search }),
+      });
+      const data = await response.json();
+      console.log(data);
+      document.getElementById("imageGrid").style.display = "block";
+      document.querySelector(".show").innerHTML = data?.data?.map((e, i) => {
+        return `
+        <div class="product-card">
+          <h3>${e?.title}</h3>
+          <p>${e?.description}</p>
+          <p>${e?.price}</p>
+          <img src='${e?.image}' width="300" height="300"/>
+        </div>
+      `;
+      });
+    }
+  </script>
+  <div>
+    <h1 style="text-align: center;">Drag and drop image for searching</h1>
+    <div class="search-container">
+      <input type="text" id="searchInput" placeholder="Search for product" />
+      <button id="searchButton" onclick="searchProducts()">Search</button>
+    </div>
+    <div class="search">
+      <div class="upload-container" id="upload-container">
+        <p>Drag & Drop an image or <label for="file-input">browse</label></p>
+        <input type="file" id="file-input" accept="image/*" />
+        <img id="preview" src="" alt="Image Preview" style="display: none" />
+      </div>
+    </div>
+    <div id="imageGrid">
+      <div class="show"></div>
+    </div>
+  </div>
+
+  <script>
+    const uploadContainer = document.getElementById("upload-container");
+    const fileInput = document.getElementById("file-input");
+    const preview = document.getElementById("preview");
+
+    uploadContainer.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      uploadContainer.classList.add("dragover");
+    });
+
+    uploadContainer.addEventListener("dragleave", () => {
+      uploadContainer.classList.remove("dragover");
+    });
+
+    uploadContainer.addEventListener("drop", (e) => {
+      e.preventDefault();
+      uploadContainer.classList.remove("dragover");
+      const file = e.dataTransfer.files[0];
+      handleFile(file);
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      handleFile(file);
+    });
+
+    function showData(data) {
+      console.log(data?.queryImage);
+      document.getElementById("imageGrid").style.display = "block";
+
+      
+      document.querySelector(".show").innerHTML = data?.queryImage?.map((e) => {
+        
+        return `
+        <div class="product-card">
+          <h3>${e?.title}</h3>
+          <p>${e?.description}</p>
+          <p>${e?.price}</p>
+          <img src='${e?.image}' width="300" height="300"/>
+        </div>
+      `});
+    }
+
+    function handleFile(file) {
+      if (file && file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          preview.src = reader.result;
+          preview.style.display = "block";
+          const base64Data = reader.result.replace(
+            /^data:image\/\w+;base64,/,
+            ""
+          ); // Remove metadata prefix
+          // console.log(base64Data, reader.result);
+          const formData = new FormData();
+          formData.append("image", file);
+          document.querySelector(".show").innerHTML = ``;
+
+          fetch("/image-search", {
+            method: "POST",
+            body: formData,
+          })
+            .then((response) => response.json())
+            .then((json) => {
+              showData(json);
+            });
+        };
+        reader.readAsDataURL(file);
+      } else {
+        alert("Please upload a valid image file.");
+      }
+    }
+  </script>
+</body>
+
+</html>

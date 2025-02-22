@@ -7,43 +7,57 @@ import {
 } from "@xenova/transformers";
 import { createReadStream } from 'fs';
 import csv from 'csv-parser';
+import { PGVectorStore } from "@langchain/community/vectorstores/pgvector";
+import pkg from 'pg';
+const { PoolConfig, Pool } = pkg;
+
+import { HuggingFaceTransformersEmbeddings } from "@langchain/community/embeddings/huggingface_transformers";
+
+// Database configuration
+const pool = new Pool({
+  user: 'postgres',
+  host: 'localhost',
+  database: 'chat_bot',
+  password: '1234',
+  port: 5432,
+});
 
 async function generateTextEmbedding(text) {
   try {
-    // Initialize all-MiniLM model
-    const tokenizer = await AutoTokenizer.from_pretrained(
-      "Xenova/all-MiniLM-L6-v2"
+    // Preprocess the text
+    const normalizedText = text
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' '); // Normalize whitespace
+
+    // Generate embedding with error checking
+    const embeddings = await model.embedQuery(normalizedText);
+    
+    // Validate embedding
+    if (!embeddings || embeddings.length !== 384) { // MiniLM outputs 384 dimensions
+      throw new Error(`Invalid embedding dimension: ${embeddings?.length}`);
+    }
+
+    // Check for NaN or invalid values
+    if (embeddings.some(val => typeof val !== 'number' || isNaN(val))) {
+      throw new Error('Embedding contains invalid values');
+    }
+
+    // Normalize the embedding vector (L2 normalization)
+    const magnitude = Math.sqrt(embeddings.reduce((sum, val) => sum + val * val, 0));
+    const normalizedEmbedding = embeddings.map(val => val / magnitude);
+
+    // Log for debugging
+    console.log('Text:', normalizedText.substring(0, 100) + '...');
+    console.log('Embedding dimension:', normalizedEmbedding.length);
+    console.log('First 5 values:', normalizedEmbedding.slice(0, 5));
+    console.log('Magnitude after normalization:', 
+      Math.sqrt(normalizedEmbedding.reduce((sum, val) => sum + val * val, 0))
     );
-    const textModel = await AutoModel.from_pretrained(
-      "Xenova/all-MiniLM-L6-v2",
-      { quantized: true }
-    );
 
-    // Normalize and combine text
-    const normalizedText = `${text}`.toLowerCase().trim();
-
-    // Generate embedding
-    const textInputs = await tokenizer(normalizedText, {
-      padding: true,
-      truncation: true,
-      max_length: 128,
-      return_tensors: 'pt'
-    });
-    const textOutput = await textModel(textInputs);
-
-    // Mean pooling
-    const meanPooling = Array.from(textOutput.last_hidden_state.data)
-      .reduce((acc, val, i) => {
-        const idx = Math.floor(i / 384);
-        if (!acc[idx]) acc[idx] = [];
-        acc[idx].push(val);
-        return acc;
-      }, [])
-      .map(arr => arr.reduce((sum, val) => sum + val, 0) / arr.length);
-
-    return meanPooling;
+    return normalizedEmbedding;
   } catch (error) {
-    console.error('Error generating text embedding:', error);
+    console.error('Error in generateTextEmbedding:', error);
     throw error;
   }
 }
@@ -92,10 +106,6 @@ async function generateImageEmbedding(imageUrl) {
     console.log("Image processing completed");
     console.log("Embedding dimension:", embeddings.length);
 
-    // Print the actual embedding data
-    // console.log("Embedding data:", embeddings);
-
-    // Verify embeddings are non-empty and contain valid numbers
     if (embeddings.length === 0) {
       throw new Error("Generated embeddings are empty");
     }
@@ -113,6 +123,7 @@ async function generateImageEmbedding(imageUrl) {
 }
 
 async function processProducts() {
+  const client = await pool.connect();
   try {
     const products = [];
 
@@ -132,29 +143,51 @@ async function processProducts() {
       try {
         console.log(`Processing product: ${product.title}`);
         
-        // Generate text embedding
-        const combinedText = `${product.title} ${product.description} ${product.price}`;
-        const textEmbedding = await generateTextEmbedding(combinedText);
-        // console.log('Text embedding:', textEmbedding); // Commented out embedding data
-        console.log('Text Dimension:', textEmbedding.length);
+        // Combine text fields with proper weighting
+        const combinedText = [
+          product.title,
+          product.description,
+          product.price.toString()
+        ].join(' ');
 
-        // Generate image embedding
-        console.log("Processing image:", product.image);
-        const embedding = await generateImageEmbedding(product.image);
-        console.log("Image Dimension:", embedding.length);
+        // Generate and validate embedding
+        const textEmbedding = await generateTextEmbedding(combinedText);
+
+        // Insert into database
+        const query = `
+          INSERT INTO products (
+            title, 
+            description, 
+            price, 
+            image_url,
+            image_url2,
+            text_embedding
+          ) VALUES ($1, $2, $3, $4, $5, $6)
+        `;
+
+        await client.query(query, [
+          product.title,
+          product.description,
+          product.price,
+          product.image,
+          product.image2 || null,
+          `[${textEmbedding.join(',')}]`  // Properly format for pgvector
+        ]);
         
-        console.log(`Successfully processed image and text for: ${product.title}`);
+        console.log(`Successfully processed: ${product.title}`);
       } catch (error) {
         console.error(`Error processing product ${product.title}:`, error);
       }
     }
 
-    console.log('All products processed successfully');
+    console.log('All products processed');
   } catch (error) {
-    console.error('Error processing products:', error);
-    throw error;
+    console.error('Error:', error);
+  } finally {
+    client.release();
+    await pool.end();
   }
 }
 
 // Run the processing
-processProducts();
+processProducts().catch(console.error);

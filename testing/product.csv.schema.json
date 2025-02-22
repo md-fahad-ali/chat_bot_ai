@@ -1,0 +1,32 @@
+{
+  "fields": [
+    {
+      "name": "title",
+      "type": "string",
+      "format": "default"
+    },
+    {
+      "name": "description",
+      "type": "string",
+      "format": "default"
+    },
+    {
+      "name": "price",
+      "type": "number",
+      "format": "default"
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "format": "uri"
+    },
+    {
+      "name": "image2",
+      "type": "string",
+      "format": "uri"
+    }
+  ],
+  "missingValues": [
+    ""
+  ]
+}
